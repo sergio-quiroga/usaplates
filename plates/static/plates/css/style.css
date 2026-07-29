@@ -136,6 +136,17 @@ main {
   stroke-width: 2px;
 }
 
+/* Small northeastern states overlap at the default zoom; reveal their
+   labels only once the map is zoomed in (see map.js zoom threshold). */
+.state-label-crowded {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.labels.zoomed-in .state-label-crowded {
+  opacity: 1;
+}
+
 .map-hint {
   text-align: center;
   font-size: 0.8rem;

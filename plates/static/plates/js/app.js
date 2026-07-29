@@ -82,7 +82,6 @@
 
   function openModal(code, name) {
     currentCode = code;
-    currentName = name;
     plateState.textContent = name;
     stateNameEl.textContent = name;
     backdrop.hidden = false;
@@ -95,7 +94,6 @@
   function closeModal() {
     backdrop.hidden = true;
     currentCode = null;
-    currentName = null;
   }
 
   function toggleSighting(person, seen) {

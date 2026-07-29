@@ -9,6 +9,11 @@
   let pathsByCode = new Map();
   let onStateClick = null;
 
+  // Tiny states that overlap their neighbors at the default zoom level;
+  // their labels only appear once the user zooms in a bit.
+  const CROWDED_CODES = new Set(["RI", "CT", "MA", "VT", "NH", "NJ", "DE", "MD", "DC"]);
+  const CROWDED_ZOOM_THRESHOLD = 2.5;
+
   function init(options) {
     onStateClick = options.onStateClick;
 
@@ -52,7 +57,10 @@
         .selectAll("text")
         .data(geo.features)
         .join("text")
-        .attr("class", "state-label")
+        .attr("class", (d) => {
+          const code = fipsToCode[d.id];
+          return "state-label" + (CROWDED_CODES.has(code) ? " state-label-crowded" : "");
+        })
         .attr("transform", (d) => `translate(${pathGen.centroid(d)})`)
         .text((d) => d.properties.name);
 
@@ -62,6 +70,7 @@
         .translateExtent([[0, 0], [width, height]])
         .on("zoom", (event) => {
           zoomLayer.attr("transform", event.transform);
+          labelsGroup.classed("zoomed-in", event.transform.k >= CROWDED_ZOOM_THRESHOLD);
         });
 
       svg.call(zoom);
