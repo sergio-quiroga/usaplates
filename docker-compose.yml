@@ -1,0 +1,24 @@
+services:
+  web:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8000:8000"
+
+  # Opcional: expone el sitio a internet a través de un Cloudflare Tunnel.
+  # 1. Crea un tunnel en https://one.dash.cloudflare.com/ (Zero Trust > Networks > Tunnels).
+  # 2. Apunta el "Public Hostname" del tunnel al servicio "web", puerto 8000.
+  # 3. Copia el token del tunnel a CLOUDFLARE_TUNNEL_TOKEN en tu archivo .env.
+  # Si ya corres cloudflared fuera de Docker en el Steam Deck, puedes borrar este servicio.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - web

@@ -1,0 +1,82 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>USA Car Plates</title>
+  <link rel="stylesheet" href="{% static 'plates/css/style.css' %}">
+</head>
+<body>
+  <header class="app-header">
+    <h1>USA Car Plates <span class="heart" aria-hidden="true">&#9825;</span></h1>
+    <p class="tagline">Nuestra colección de patentes vistas por el camino</p>
+
+    <div class="person-switch" role="group" aria-label="¿Quién está marcando?">
+      <button type="button" class="person-btn" data-person="el">Él</button>
+      <button type="button" class="person-btn" data-person="ella">Ella</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="map-wrap">
+      <div id="map" aria-label="Mapa de Estados Unidos"></div>
+      <div class="map-hint">Pellizca o usa la rueda del mouse para hacer zoom · arrastra para mover</div>
+    </div>
+
+    <ul class="legend">
+      <li><span class="swatch swatch-none"></span> Sin ver</li>
+      <li><span class="swatch swatch-him"></span> Solo él</li>
+      <li><span class="swatch swatch-her"></span> Solo ella</li>
+      <li><span class="swatch swatch-both"></span> Ambos &#9825;</li>
+    </ul>
+  </main>
+
+  <div id="modal-backdrop" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-state-name">
+      <button type="button" class="modal-close" id="modal-close" aria-label="Cerrar">&times;</button>
+
+      <div class="plate" id="modal-plate">
+        <div class="plate-top">USA</div>
+        <div class="plate-state" id="modal-plate-state">STATE</div>
+        <div class="plate-number">USA&#9825;PLT</div>
+      </div>
+
+      <h2 id="modal-state-name">Estado</h2>
+
+      <div class="modal-options">
+        <label class="option option-el">
+          <input type="checkbox" id="check-el">
+          <span>Él vio esta patente</span>
+        </label>
+        <label class="option option-ella">
+          <input type="checkbox" id="check-ella">
+          <span>Ella vio esta patente</span>
+        </label>
+      </div>
+
+      <div class="modal-dates" id="modal-dates" hidden>
+        <p>Primera vez marcada: <strong id="date-first"></strong></p>
+        <p>Última modificación: <strong id="date-last"></strong></p>
+      </div>
+
+      <p class="modal-empty" id="modal-empty">Todavía no han visto una patente de este estado.</p>
+    </div>
+  </div>
+
+  <script id="fips-to-code" type="application/json">{{ fips_to_code_json|safe }}</script>
+
+  <script src="{% static 'plates/vendor/d3.min.js' %}"></script>
+  <script src="{% static 'plates/vendor/topojson-client.min.js' %}"></script>
+  <script>
+    window.USAPLATES = {
+      statesTopoUrl: "{% static 'plates/data/states-albers-10m.json' %}",
+      apiStatesUrl: "{% url 'plates:state-list' %}",
+      apiStateDetailUrl: "{% url 'plates:state-detail' code='__CODE__' %}",
+      apiSightingUrl: "{% url 'plates:sighting-detail' code='__CODE__' person='__PERSON__' %}"
+    };
+  </script>
+  <script src="{% static 'plates/js/map.js' %}"></script>
+  <script src="{% static 'plates/js/app.js' %}"></script>
+</body>
+</html>
