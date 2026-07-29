@@ -126,5 +126,5 @@
       onStateClick: (code) => openModal(code, nameByCode[code] || code),
     }),
     fetchStates(),
-  ]);
+  ]).then(() => window.USAPLATESMap.updateStatuses(statusByCode));
 })();
