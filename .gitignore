@@ -5,7 +5,7 @@ __pycache__/
 venv/
 
 # Django
-data/
+/data/
 staticfiles/
 *.sqlite3
 *.log
