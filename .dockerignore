@@ -4,7 +4,7 @@ __pycache__/
 *.pyc
 .git/
 .github/
-data/
+/data/
 staticfiles/
 *.sqlite3
 .env
