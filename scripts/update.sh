@@ -1,102 +1,123 @@
 #!/usr/bin/env bash
-# Actualiza la app desde GitHub y reinicia el contenedor, respaldando antes
-# la base de datos. Pensado para correr en el servidor, dentro del clon:
+# Actualiza la app desde GitHub y reinicia el servicio, respaldando antes la
+# base de datos. Corre en el servidor (podman rootless + Quadlet), dentro
+# del clon:
 #
-#   ./scripts/update.sh
+#   ./scripts/update.sh            # solo si hay commits nuevos
+#   ./scripts/update.sh --force    # reconstruye y reinicia aunque no los haya
 #
 # Pasos: git pull (solo fast-forward) -> build de la imagen nueva (la app
-# sigue corriendo) -> stop -> respaldo de data/ verificado -> recrear
-# contenedores -> verificar HTTP, integridad y conteos de la BD.
+# sigue corriendo) -> stop -> respaldo de data/ verificado -> start ->
+# verificar HTTP, integridad y conteos de la BD.
 # Respaldos en ~/usaplates-backups/<fecha>/ (se conservan los últimos 10).
 set -euo pipefail
 
+IMAGE="localhost/usaplates:latest"
+PREVIOUS="localhost/usaplates:previous"
+SERVICE="usaplates.service"
+QUADLET_DIR="$HOME/.config/containers/systemd"
+
 main() {
-    local app_dir backups ts bk old new compose before after
+    local force=0 app_dir backups ts bk old new before after
+    [ "${1:-}" = "--force" ] && force=1
     app_dir="$(cd "$(dirname "$0")/.." && pwd)"
     backups="$HOME/usaplates-backups"
     cd "$app_dir"
 
-    if command -v podman-compose >/dev/null; then compose="podman-compose"
-    elif podman compose version >/dev/null 2>&1; then compose="podman compose"
-    else die "no se encontró podman-compose ni 'podman compose'"; fi
-
     [ -f data/db.sqlite3 ] || die "no existe $app_dir/data/db.sqlite3"
     [ -f .env ] || die "no existe $app_dir/.env"
-    git diff --quiet && git diff --cached --quiet \
+    git -c core.fileMode=false diff --quiet && git diff --cached --quiet \
         || die "hay cambios locales en archivos versionados (ver 'git status'); resuélvelos antes de actualizar"
 
     say "Buscando cambios en GitHub"
     git fetch origin
     old="$(git rev-parse HEAD)"
     new="$(git rev-parse '@{u}')"
-    if [ "$old" = "$new" ]; then
+    if [ "$old" = "$new" ] && [ "$force" -eq 0 ]; then
         echo "Ya está en la última versión ($(git log -1 --format='%h %s'))."
+        echo "Usa --force para reconstruir y reiniciar de todas formas."
         exit 0
     fi
     git log --oneline "$old..$new"
     git merge --ff-only '@{u}'
 
     say "Construyendo imagen nueva (la app sigue corriendo)"
-    if ! $compose build web; then
+    podman image exists "$IMAGE" && podman tag "$IMAGE" "$PREVIOUS"
+    if ! podman build -t "$IMAGE" .; then
         git reset --hard "$old"
         die "falló el build; el código volvió a la versión anterior y la app sigue corriendo"
     fi
 
     say "Deteniendo la app y respaldando la base de datos"
     before="$(db_counts data/db.sqlite3)"
-    $compose stop
+    systemctl --user stop "$SERVICE"
     ts="$(date +%Y%m%d-%H%M%S)"
     bk="$backups/$ts"
     mkdir -p "$bk"
-    cp -r --preserve=mode,timestamps data "$bk/data"
-    cmp data/db.sqlite3 "$bk/data/db.sqlite3"
-    [ "$(db_integrity "$bk/data/db.sqlite3")" = "ok" ] || die "el respaldo no pasó integrity_check (la app quedó detenida: '$compose start')"
+    # podman unshare: los archivos de data/ pertenecen al usuario del contenedor
+    podman unshare cp -a data "$bk/data"
+    podman unshare cmp data/db.sqlite3 "$bk/data/db.sqlite3"
+    [ "$(db_integrity "$bk/data/db.sqlite3")" = "ok" ] \
+        || die "el respaldo no pasó integrity_check (la app quedó detenida: systemctl --user start $SERVICE)"
     echo "$old" > "$bk/previous-commit"
     echo "Respaldo OK: $bk"
 
     say "Levantando la versión nueva"
-    $compose down
-    $compose up -d
+    if ! cmp -s deploy/usaplates.container "$QUADLET_DIR/usaplates.container"; then
+        mkdir -p "$QUADLET_DIR"
+        cp deploy/usaplates.container "$QUADLET_DIR/usaplates.container"
+        systemctl --user daemon-reload
+        echo "Quadlet actualizado"
+    fi
+    systemctl --user start "$SERVICE"
 
     say "Verificando"
     for _ in $(seq 1 30); do
-        curl -fsS -o /dev/null http://localhost:8000/api/states/ 2>/dev/null && break
+        http_ok && break
         sleep 2
     done
-    curl -fsS -o /dev/null http://localhost:8000/api/states/ || die "la app no responde en :8000 ('$compose logs web')"
+    http_ok || die "la app no responde en :8000 (journalctl --user -u $SERVICE -n 50)"
+    echo "HTTP: ok"
     [ "$(db_integrity data/db.sqlite3)" = "ok" ] || die "integrity_check falló en la BD activa"
     after="$(db_counts data/db.sqlite3)"
     echo "Estados/patentes antes: $before | después: $after"
     [ "$before" = "$after" ] || die "los conteos cambiaron; respaldo en $bk"
 
-    # Conservar solo los 10 respaldos más recientes
-    ls -1d "$backups"/*/ 2>/dev/null | sort | head -n -10 | xargs -r rm -rf
+    # Conservar solo los 10 respaldos más recientes; borrar imágenes huérfanas
+    ls -1d "$backups"/*/ 2>/dev/null | sort | head -n -10 | xargs -r podman unshare rm -rf
+    podman image prune -f >/dev/null
 
     say "Listo: $(git log -1 --format='%h %s')"
     cat <<EOF
 Para revertir:
-  cd $app_dir && $compose down
+  systemctl --user stop $SERVICE
+  cd $app_dir
   podman unshare mv data data.failed-$ts
-  cp -r $bk/data data
+  podman unshare cp -a $bk/data data
   git reset --hard $old
-  $compose build web && $compose up -d
+  podman tag $PREVIOUS $IMAGE
+  systemctl --user start $SERVICE
 EOF
 }
 
 db_counts() {
-    python3 - "$1" <<'PY'
+    podman unshare python3 -c '
 import sqlite3, sys
 db = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
 print(" ".join(str(db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0])
                for t in ("plates_state", "plates_sighting")))
-PY
+' "$1"
 }
 
 db_integrity() {
-    python3 - "$1" <<'PY'
+    podman unshare python3 -c '
 import sqlite3, sys
 print(sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True).execute("PRAGMA integrity_check").fetchone()[0])
-PY
+' "$1"
+}
+
+http_ok() {
+    python3 -c 'import urllib.request; urllib.request.urlopen("http://localhost:8000/api/states/", timeout=5)' 2>/dev/null
 }
 
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }

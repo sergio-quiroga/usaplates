@@ -1,0 +1,20 @@
+# Quadlet (podman rootless + systemd). Se instala en
+# ~/.config/containers/systemd/ del equipo remoto (scripts/update.sh lo hace).
+[Unit]
+Description=USA Car Plates
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=localhost/usaplates:latest
+ContainerName=usaplates
+EnvironmentFile=%h/usaplates/.env
+PublishPort=8000:8000
+Volume=%h/usaplates/data:/app/data
+
+[Service]
+Restart=always
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target
