@@ -3,6 +3,7 @@
 
   const config = window.USAPLATES;
   const PERSON_KEY = "usaplates_person";
+  const RETRY_DELAY_MS = 2000;
 
   const personButtons = document.querySelectorAll(".person-btn");
   const backdrop = document.getElementById("modal-backdrop");
@@ -15,10 +16,15 @@
   const dateFirst = document.getElementById("date-first");
   const dateLast = document.getElementById("date-last");
   const emptyMsg = document.getElementById("modal-empty");
+  const loadingMsg = document.getElementById("modal-loading");
 
   let statusByCode = {};
   let nameByCode = {};
   let currentCode = null;
+  // Last request issued per state code. Responses from older requests are
+  // ignored so a slow response never overwrites newer data.
+  let requestSeq = 0;
+  const latestSeqByCode = {};
 
   const dateFormatter = new Intl.DateTimeFormat("es-CL", {
     dateStyle: "medium",
@@ -62,9 +68,25 @@
     return config.apiSightingUrl.replace("__CODE__", code).replace("__PERSON__", person);
   }
 
+  function setChecksEnabled(enabled) {
+    checkEl.disabled = !enabled;
+    checkElla.disabled = !enabled;
+  }
+
+  function showLoading() {
+    checkEl.checked = false;
+    checkElla.checked = false;
+    setChecksEnabled(false);
+    datesBox.hidden = true;
+    emptyMsg.hidden = true;
+    loadingMsg.hidden = false;
+  }
+
   function renderDetail(detail) {
     checkEl.checked = detail.him.seen;
     checkElla.checked = detail.her.seen;
+    setChecksEnabled(true);
+    loadingMsg.hidden = true;
 
     if (detail.first_seen) {
       datesBox.hidden = false;
@@ -75,20 +97,42 @@
       datesBox.hidden = true;
       emptyMsg.hidden = false;
     }
+  }
 
-    statusByCode[detail.code] = detail.status;
-    window.USAPLATESMap.updateStatuses(statusByCode);
+  // Runs a request for a state and applies its response only if it is still
+  // the latest one for that state (map) and that state is still open (modal).
+  function requestDetail(code, url, options) {
+    const seq = ++requestSeq;
+    latestSeqByCode[code] = seq;
+
+    return fetch(url, Object.assign({ cache: "no-store" }, options))
+      .then((r) => {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then((detail) => {
+        if (latestSeqByCode[code] !== seq) return;
+        statusByCode[detail.code] = detail.status;
+        window.USAPLATESMap.updateStatuses(statusByCode);
+        if (currentCode === code) renderDetail(detail);
+      })
+      .catch(() => {
+        // Resync with the server so the modal never shows unconfirmed data.
+        setTimeout(() => {
+          if (latestSeqByCode[code] !== seq || currentCode !== code) return;
+          requestDetail(code, stateDetailUrl(code));
+        }, RETRY_DELAY_MS);
+      });
   }
 
   function openModal(code, name) {
     currentCode = code;
     plateState.textContent = name;
     stateNameEl.textContent = name;
+    showLoading();
     backdrop.hidden = false;
 
-    fetch(stateDetailUrl(code))
-      .then((r) => r.json())
-      .then(renderDetail);
+    requestDetail(code, stateDetailUrl(code));
   }
 
   function closeModal() {
@@ -98,14 +142,12 @@
 
   function toggleSighting(person, seen) {
     if (!currentCode) return;
-    const url = sightingUrl(currentCode, person);
-    const request = seen
-      ? fetch(url, { method: "PUT" })
-      : fetch(url, { method: "DELETE" });
-
-    request
-      .then((r) => r.json())
-      .then(renderDetail);
+    // Block further clicks until the server confirms, so requests for the
+    // same state can't be processed out of order.
+    setChecksEnabled(false);
+    requestDetail(currentCode, sightingUrl(currentCode, person), {
+      method: seen ? "PUT" : "DELETE",
+    });
   }
 
   checkEl.addEventListener("change", () => toggleSighting("el", checkEl.checked));

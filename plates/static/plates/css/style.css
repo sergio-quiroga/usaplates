@@ -298,6 +298,11 @@ main {
   accent-color: var(--color-accent);
 }
 
+.option:has(input:disabled) {
+  opacity: 0.55;
+  cursor: progress;
+}
+
 .option-el { border-left: 4px solid var(--color-him); }
 .option-ella { border-left: 4px solid var(--color-her); }
 
