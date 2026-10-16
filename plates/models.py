@@ -7,6 +7,9 @@ class State(models.Model):
     code = models.CharField(max_length=2, primary_key=True)
     name = models.CharField(max_length=64, unique=True)
     fips = models.CharField(max_length=2, unique=True)
+    # Time of the last mark/unmark of any sighting. Kept on the state because
+    # an unmark deletes the sighting row and its own timestamp with it.
+    last_changed = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["name"]

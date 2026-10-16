@@ -1,6 +1,8 @@
 import json
 
+from django.db import transaction
 from django.shortcuts import render
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import NotFound, ParseError
 from rest_framework.response import Response
@@ -32,6 +34,10 @@ def _get_state_or_404(code):
         raise NotFound(f"Estado '{code}' no existe.")
 
 
+def _touch(state):
+    State.objects.filter(pk=state.pk).update(last_changed=timezone.now())
+
+
 class StateListView(APIView):
     def get(self, request):
         states = State.objects.prefetch_related("sightings").all()
@@ -50,13 +56,21 @@ class SightingView(APIView):
     def put(self, request, code, person):
         state = _get_state_or_404(code)
         person_key = _person_or_400(person)
-        Sighting.objects.update_or_create(state=state, person=person_key)
+        # get_or_create (not update_or_create) so re-marking an already-seen
+        # state is a true no-op and doesn't bump any timestamp.
+        with transaction.atomic():
+            _, created = Sighting.objects.get_or_create(state=state, person=person_key)
+            if created:
+                _touch(state)
         state = _get_state_or_404(code)
         return Response(StateDetailSerializer(state).data, status=status.HTTP_200_OK)
 
     def delete(self, request, code, person):
         state = _get_state_or_404(code)
         person_key = _person_or_400(person)
-        Sighting.objects.filter(state=state, person=person_key).delete()
+        with transaction.atomic():
+            deleted, _ = Sighting.objects.filter(state=state, person=person_key).delete()
+            if deleted:
+                _touch(state)
         state = _get_state_or_404(code)
         return Response(StateDetailSerializer(state).data, status=status.HTTP_200_OK)

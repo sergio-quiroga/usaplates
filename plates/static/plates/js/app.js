@@ -21,10 +21,17 @@
   let statusByCode = {};
   let nameByCode = {};
   let currentCode = null;
-  // Last request issued per state code. Responses from older requests are
-  // ignored so a slow response never overwrites newer data.
+  let currentDetail = null;
+  // Every request gets an increasing number. latestSeqByCode is the newest
+  // detail/write request per state (only its response may fill the modal);
+  // appliedSeqByCode is the newest response already painted on the map, so an
+  // older response (detail or full list) never overwrites newer data.
   let requestSeq = 0;
   const latestSeqByCode = {};
+  const appliedSeqByCode = {};
+  // Unconfirmed mark/unmark per state, so list refreshes and reopening the
+  // modal don't show data read before the write was committed.
+  const pendingWrites = new Map();
 
   const dateFormatter = new Intl.DateTimeFormat("es-CL", {
     dateStyle: "medium",
@@ -46,15 +53,23 @@
     btn.addEventListener("click", () => setPerson(btn.dataset.person));
   });
 
+  function applyMapStatus(code, status, seq) {
+    if ((appliedSeqByCode[code] || 0) > seq) return;
+    appliedSeqByCode[code] = seq;
+    statusByCode[code] = status;
+  }
+
   function fetchStates() {
-    return fetch(config.apiStatesUrl)
-      .then((r) => r.json())
+    const seq = ++requestSeq;
+    return fetch(config.apiStatesUrl, { cache: "no-store" })
+      .then((r) => {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
       .then((states) => {
-        statusByCode = {};
-        nameByCode = {};
         states.forEach((s) => {
-          statusByCode[s.code] = s.status;
           nameByCode[s.code] = s.name;
+          if (!pendingWrites.has(s.code)) applyMapStatus(s.code, s.status, seq);
         });
         window.USAPLATESMap.updateStatuses(statusByCode);
       });
@@ -74,6 +89,7 @@
   }
 
   function showLoading() {
+    currentDetail = null;
     checkEl.checked = false;
     checkElla.checked = false;
     setChecksEnabled(false);
@@ -83,6 +99,7 @@
   }
 
   function renderDetail(detail) {
+    currentDetail = detail;
     checkEl.checked = detail.him.seen;
     checkElla.checked = detail.her.seen;
     setChecksEnabled(true);
@@ -111,10 +128,9 @@
         return r.json();
       })
       .then((detail) => {
-        if (latestSeqByCode[code] !== seq) return;
-        statusByCode[detail.code] = detail.status;
+        applyMapStatus(code, detail.status, seq);
         window.USAPLATESMap.updateStatuses(statusByCode);
-        if (currentCode === code) renderDetail(detail);
+        if (latestSeqByCode[code] === seq && currentCode === code) renderDetail(detail);
       })
       .catch(() => {
         // Resync with the server so the modal never shows unconfirmed data.
@@ -132,7 +148,10 @@
     showLoading();
     backdrop.hidden = false;
 
-    requestDetail(code, stateDetailUrl(code));
+    // If a mark/unmark for this state is still in flight, read after it lands.
+    (pendingWrites.get(code) || Promise.resolve()).then(() => {
+      if (currentCode === code) requestDetail(code, stateDetailUrl(code));
+    });
   }
 
   function closeModal() {
@@ -140,18 +159,57 @@
     currentCode = null;
   }
 
-  function toggleSighting(person, seen) {
-    if (!currentCode) return;
+  // Unmarking deletes the sighting and its first-seen date for good, so it
+  // needs an explicit confirmation.
+  function confirmUnmark(person) {
+    const sighting = person === "el" ? currentDetail.him : currentDetail.her;
+    const who = person === "el" ? "él" : "ella";
+    const since = sighting.first_seen
+      ? " (" + dateFormatter.format(new Date(sighting.first_seen)) + ")"
+      : "";
+    return window.confirm(
+      `¿Desmarcar que ${who} vio la patente de ${stateNameEl.textContent}?\n\n` +
+        `Se borrará la fecha en que ${who} la vio por primera vez${since} y no se podrá recuperar.`
+    );
+  }
+
+  function toggleSighting(checkbox, person) {
+    const code = currentCode;
+    if (!code || !currentDetail) return;
+    const seen = checkbox.checked;
+    if (!seen && !confirmUnmark(person)) {
+      checkbox.checked = true;
+      return;
+    }
     // Block further clicks until the server confirms, so requests for the
     // same state can't be processed out of order.
     setChecksEnabled(false);
-    requestDetail(currentCode, sightingUrl(currentCode, person), {
+    const write = requestDetail(code, sightingUrl(code, person), {
       method: seen ? "PUT" : "DELETE",
+    });
+    pendingWrites.set(code, write);
+    write.then(() => {
+      if (pendingWrites.get(code) === write) pendingWrites.delete(code);
     });
   }
 
-  checkEl.addEventListener("change", () => toggleSighting("el", checkEl.checked));
-  checkElla.addEventListener("change", () => toggleSighting("ella", checkElla.checked));
+  checkEl.addEventListener("change", () => toggleSighting(checkEl, "el"));
+  checkElla.addEventListener("change", () => toggleSighting(checkElla, "ella"));
+
+  // Pick up changes made from the other phone when coming back to the app.
+  function refresh() {
+    fetchStates().catch(() => {});
+    if (currentCode && currentDetail && !pendingWrites.has(currentCode)) {
+      requestDetail(currentCode, stateDetailUrl(currentCode));
+    }
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") refresh();
+  });
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) refresh();
+  });
 
   closeBtn.addEventListener("click", closeModal);
   backdrop.addEventListener("click", (event) => {

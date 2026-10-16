@@ -72,5 +72,10 @@ class StateDetailSerializer(serializers.ModelSerializer):
         return min(dates) if dates else None
 
     def get_last_modified(self, obj):
+        if not self._sightings_by_person(obj):
+            return None
         dates = [s.last_modified for s in self._sightings_by_person(obj).values()]
-        return max(dates) if dates else None
+        # last_changed also covers unmarks, whose sighting row no longer exists.
+        if obj.last_changed:
+            dates.append(obj.last_changed)
+        return max(dates)

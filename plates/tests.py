@@ -44,3 +44,16 @@ class SightingFlowTests(TestCase):
         first = self.client.put(url).json()
         second = self.client.put(url).json()
         self.assertEqual(first["him"]["first_seen"], second["him"]["first_seen"])
+
+    def test_repeated_put_does_not_bump_last_modified(self):
+        url = reverse("plates:sighting-detail", args=["CA", "el"])
+        first = self.client.put(url).json()
+        second = self.client.put(url).json()
+        self.assertEqual(first["last_modified"], second["last_modified"])
+        self.assertEqual(first["him"]["last_modified"], second["him"]["last_modified"])
+
+    def test_unmarking_one_person_advances_last_modified(self):
+        self.client.put(reverse("plates:sighting-detail", args=["CA", "ella"]))
+        before = self.client.put(reverse("plates:sighting-detail", args=["CA", "el"])).json()
+        after = self.client.delete(reverse("plates:sighting-detail", args=["CA", "el"])).json()
+        self.assertGreater(after["last_modified"], before["last_modified"])
