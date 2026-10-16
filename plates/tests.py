@@ -1,3 +1,6 @@
+from io import StringIO
+
+from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 
@@ -57,3 +60,14 @@ class SightingFlowTests(TestCase):
         before = self.client.put(reverse("plates:sighting-detail", args=["CA", "el"])).json()
         after = self.client.delete(reverse("plates:sighting-detail", args=["CA", "el"])).json()
         self.assertGreater(after["last_modified"], before["last_modified"])
+
+    def test_seed_states_keeps_last_changed(self):
+        self.client.put(reverse("plates:sighting-detail", args=["CA", "el"]))
+        self.client.delete(reverse("plates:sighting-detail", args=["CA", "el"]))
+        before = State.objects.get(code="CA").last_changed
+        self.assertIsNotNone(before)
+
+        call_command("seed_states", stdout=StringIO())
+
+        self.assertEqual(State.objects.get(code="CA").last_changed, before)
+        self.assertEqual(State.objects.count(), 51)
